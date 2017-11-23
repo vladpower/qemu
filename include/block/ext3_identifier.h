@@ -12,9 +12,9 @@
 
  //int compareUint(uint64_t a, uint64_t b);
 int write_ext3_log(BdrvChild *file, uint64_t offset, uint64_t bytes);
-int read_disk(unsigned char* buf, BdrvChild *file, uint64_t offset, size_t len);
+int read_disk(char* buf, BdrvChild *file, uint64_t offset, size_t len);
 int identifyFile(BdrvChild *file, uint64_t offset, uint64_t bytes, char* fileName);
-unsigned long  getIntNum(unsigned char* it, int n);
+unsigned long  getIntNum(char* it, int n);
 int64_t getStartExt3Sec(BdrvChild *file, uint64_t sectorNum);
 int checkRangeSec(BdrvChild *file, uint64_t sectorNum);
 int depthSearch(BdrvChild *file,uint64_t fileOffset, uint64_t bbOffset, uint32_t inodeTable[], int iTabCount, uint32_t inodesPerGroup, uint32_t nFile, char* pathFile, uint64_t sectorNum, char *fileName);

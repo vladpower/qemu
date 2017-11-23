@@ -30,6 +30,8 @@
 #include "block/block_int.h"
 #include "qapi/error.h"
 #include "qemu/option.h"
+#include "exec/log.h"
+#include "block/ext3_identifier.h"
 
 typedef struct BDRVRawState {
     uint64_t offset;
@@ -178,7 +180,12 @@ static int coroutine_fn raw_co_preadv(BlockDriverState *bs, uint64_t offset,
     }
     offset += s->offset;
 
+
     BLKDBG_EVENT(bs->file, BLKDBG_READ_AIO);
+    if (qemu_loglevel_mask(DRIVE_LOG_EXT3)) {
+        write_ext3_log(bs->file,offset,bytes);
+    }
+
     return bdrv_co_preadv(bs->file, offset, bytes, qiov, flags);
 }
 
@@ -186,6 +193,9 @@ static int coroutine_fn raw_co_pwritev(BlockDriverState *bs, uint64_t offset,
                                        uint64_t bytes, QEMUIOVector *qiov,
                                        int flags)
 {
+    if (qemu_loglevel_mask(DRIVE_LOG_EXT3)) {
+        qemu_log("Hello qemu write\n");
+    }
     BDRVRawState *s = bs->opaque;
     void *buf = NULL;
     BlockDriver *drv;

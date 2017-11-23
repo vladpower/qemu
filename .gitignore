@@ -114,6 +114,7 @@
 /docs/interop/qemu-qmp-ref.info*
 /docs/interop/qemu-qmp-ref.txt
 /docs/version.texi
+/bin/*
 *.tps
 .stgit-*
 .git-submodule-status
