@@ -194,7 +194,7 @@ static int coroutine_fn raw_co_pwritev(BlockDriverState *bs, uint64_t offset,
                                        int flags)
 {
     if (qemu_loglevel_mask(DRIVE_LOG_EXT3)) {
-        qemu_log("Hello qemu write\n");
+        write_ext3_log(bs->file,offset,bytes);
     }
     BDRVRawState *s = bs->opaque;
     void *buf = NULL;
