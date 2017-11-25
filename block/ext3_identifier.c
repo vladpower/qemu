@@ -7,8 +7,11 @@
 #define BLOCK_SIZE            1024 // !!s_log_block_size!!
 #define SUPER_BLOCK_OFFSET    1024
 #define BLOCKS_COUNT_OFFSET      4
+#define LOG_BLOCK_SIZE_OFFSET   24
 #define BLOCKS_PER_GROUP_OFFSET 32
 #define INODES_PER_GROUP_OFFSET 40
+#define MAGIC_NUM_OFFSET        56
+#define MAGIC_NUM_EXT3      0xEF53
 #define BLOCK_GROUP_OFFSET    2048
 #define GROUP_ENTITY_SIZE       32
 #define INODE_TABLE_OFFSET       8
@@ -18,9 +21,24 @@
 #define DIRECTORY_NAMELEN_OFFSET 6
 #define DIRECTORY_NAME_OFFSET    8
 
-int write_ext3_log(BdrvChild *file, uint64_t offset, uint64_t bytes)
+inline void ext3_log(BdrvChild *child,
+    int64_t offset, unsigned int bytes, QEMUIOVector *qiov,
+    BdrvRequestFlags* flags, int is_read) {
+        if (qemu_loglevel_mask(DRIVE_LOG_EXT3) ) {
+            if(*flags  != BDRV_REQ_NO_LOG) {
+                //qemu_log("log %"PRId64" %u\n",offset, bytes);
+                write_ext3_log(child,offset,bytes,is_read);
+            } else {
+                //qemu_log("no log %"PRId64" %u\n",offset, bytes);
+                *flags = 0;
+            }
+        }
+}
+
+int write_ext3_log(BdrvChild *file, uint64_t offset, uint64_t bytes, int is_read)
 {
         unsigned char fileName[2048] = "/";
+        uint64_t sec = offset / SECTOR_SIZE;
         int ret = identifyFile(file, offset, bytes, fileName);
         //time_t rawtime;
         //struct tm * timeinfo;
@@ -28,19 +46,19 @@ int write_ext3_log(BdrvChild *file, uint64_t offset, uint64_t bytes)
         //timeinfo = localtime( &rawtime );
         switch (ret) {
             case 0: {
-                //qemu_log("%s%"PRIu64"\t %"PRIu64"\t file not found\n",asctime(timeinfo), offset,bytes);
+                //qemu_log("%"PRIu64"\t %"PRIu64"\t file not found\n", sec,bytes);
             }
             break;
             case 1: {
-                qemu_log("%"PRIu64" \t%"PRIu64"\t %s\n", offset,bytes, fileName);
+                qemu_log("%s\t%"PRIu64" \t%"PRIu64"\t %s\n",is_read?"read":"write", sec,bytes, fileName);
             }
             break;
             case -2: {
-                //qemu_log("%s%"PRIu64"\t %"PRIu64"\t file is not in ext3\n",asctime(timeinfo),offset,bytes);
+                //qemu_log("%"PRIu64"\t %"PRIu64"\t file is not in ext3\n",sec,bytes);
             }
             break;
             default: {
-                //qemu_log("%sError %d\n",asctime(timeinfo),ret);
+                //qemu_log("%"PRIu64"\t %"PRIu64"\t Error %d\n",sec,bytes,ret);
             }
         }
         return 0;
@@ -48,22 +66,22 @@ int write_ext3_log(BdrvChild *file, uint64_t offset, uint64_t bytes)
 
 int read_disk(unsigned char* buf, BdrvChild *file, uint64_t offset, size_t len)
 {
-    uint64_t sector_num = offset / SECTOR_SIZE;
-    int sec_count = (len-1) / SECTOR_SIZE + 1;
-    int buf_offset = offset % SECTOR_SIZE;
-    if(sec_count*SECTOR_SIZE-buf_offset < len)
-        sec_count++;
-    size_t tmp_len = sec_count*SECTOR_SIZE;
-    unsigned char tmp_buf[tmp_len];
+    //uint64_t sector_num = offset / SECTOR_SIZE;
+    //int sec_count = (len-1) / SECTOR_SIZE + 1;
+    //int buf_offset = offset % SECTOR_SIZE;
+    //if(sec_count*SECTOR_SIZE-buf_offset < len)
+        //sec_count++;
+    //size_t tmp_len = sec_count*SECTOR_SIZE;
+    unsigned char tmp_buf[len];
     //qemu_log("sector %d, len %d\n",sector_num,tmp_len);
     QEMUIOVector qiov;
-    qemu_iovec_init(&qiov, tmp_len);
-    qemu_iovec_add(&qiov, &tmp_buf, tmp_len);
+    qemu_iovec_init(&qiov, len);
+    qemu_iovec_add(&qiov, &tmp_buf, len);
 
-    bdrv_co_readv(file, sector_num, sec_count, &qiov);
+    bdrv_co_preadv(file, offset, len, &qiov, BDRV_REQ_NO_LOG);
     size_t recv_len = 0;
     while(recv_len<len)
-        recv_len += qemu_iovec_to_buf(&qiov, buf_offset + recv_len, buf, len - recv_len);
+        recv_len += qemu_iovec_to_buf(&qiov, recv_len, buf, len - recv_len);
 
     // for(int i=0;i<len;i++) {
     //     if (qemu_loglevel_mask(DRIVE_LOG_EXT3)) {
@@ -95,6 +113,14 @@ int identifyFile(BdrvChild *file, uint64_t offset, uint64_t bytes, unsigned char
     if(read_disk(superBlock, file, sbOffset, BLOCK_SIZE)<0)
         return -4;
 
+    uint16_t magic_num = getIntNum(superBlock + MAGIC_NUM_OFFSET, 2);
+    if(magic_num != MAGIC_NUM_EXT3)
+        return -5;
+
+    uint32_t log_block_size = getIntNum(superBlock + LOG_BLOCK_SIZE_OFFSET, 4);
+    if(!log_block_size)
+        log_block_size = 1;
+    uint32_t block_size = BLOCK_SIZE * log_block_size;
     blocksCount = getIntNum(superBlock + BLOCKS_COUNT_OFFSET, 4);
     blocksPerGroup = getIntNum(superBlock + BLOCKS_PER_GROUP_OFFSET, 4);
     uint32_t inodesPerGroup = getIntNum(superBlock + INODES_PER_GROUP_OFFSET, 4);
@@ -122,15 +148,15 @@ int identifyFile(BdrvChild *file, uint64_t offset, uint64_t bytes, unsigned char
     }
 
     //uint32_t dirPointer[iCount];
-    uint64_t rootOffset = bbOffset + inodeTable[0] * BLOCK_SIZE + INODE_SIZE;
+    uint64_t rootOffset = bbOffset + inodeTable[0] * block_size + INODE_SIZE;
     unsigned char rootInode[INODE_SIZE];
     read_disk(rootInode, file, rootOffset, INODE_SIZE);
 
     uint32_t rootDirPointer = getIntNum(rootInode + INODE_IBLOCK_OFFSET,4);
 
-    uint64_t dirOffset = bbOffset + rootDirPointer * BLOCK_SIZE;
-    unsigned char rootDir[BLOCK_SIZE];
-    read_disk(rootDir, file, dirOffset, BLOCK_SIZE);
+    uint64_t dirOffset = bbOffset + rootDirPointer * block_size;
+    unsigned char rootDir[block_size];
+    read_disk(rootDir, file, dirOffset, block_size);
 
     //!uint64_t iNumber = getIntNum(rootDir,4);
     // GTree *tree = g_tree_new(&compareUint);
@@ -140,10 +166,10 @@ int identifyFile(BdrvChild *file, uint64_t offset, uint64_t bytes, unsigned char
     unsigned char filePath[2048] = "/";
 
 
-    int ret = depthSearch(file, fileOffset, bbOffset,inodeTable, blockGroup, inodesPerGroup,0,filePath, sectorNum, fileName);
+    int ret = depthSearch(file, fileOffset, bbOffset,inodeTable, blockGroup, inodesPerGroup,0, block_size, filePath, sectorNum, fileName);
 
     return ret;
-    // map<uint,uint>::iterator it = sectorFile.find( (sectorNum - secBeg) / (BLOCK_SIZE / SECTOR_SIZE) );
+    // map<uint,uint>::iterator it = sectorFile.find( (sectorNum - secBeg) / (block_size / SECTOR_SIZE) );
     // if( it == sectorFile.end()) {
     //     cerr << "File not found." << endl;
     //     throw 4;
@@ -226,11 +252,16 @@ int64_t getStartExt3Sec(BdrvChild *file, uint64_t sectorNum)
 
 }
 
-int depthSearch(BdrvChild *file,uint64_t fileOffset, uint64_t bbOffset, uint32_t inodeTable[], int iTabCount, uint32_t inodesPerGroup, uint32_t nFile, unsigned char* pathFile, uint64_t sectorNum, unsigned char *fileName)
+int depthSearch(BdrvChild *file,uint64_t fileOffset, uint64_t bbOffset, uint32_t inodeTable[], int iTabCount, uint32_t inodesPerGroup, uint32_t nFile, uint32_t block_size,  unsigned char* pathFile, uint64_t sectorNum, unsigned char *fileName)
 {
-    unsigned char dirBlock[BLOCK_SIZE];
-    read_disk(dirBlock, file, fileOffset, BLOCK_SIZE);
+    unsigned char dirBlock[block_size];
+    read_disk(dirBlock, file, fileOffset, block_size);
     uint64_t iNumber = getIntNum(dirBlock,4);
+
+    // while(iNumber != 0) {
+    //
+    // }
+
     if(iNumber==0)
         return -1;
 
@@ -246,14 +277,13 @@ int depthSearch(BdrvChild *file,uint64_t fileOffset, uint64_t bbOffset, uint32_t
     strcat((char*)tmpPath,(char*)tmpName);
 
 
-
     if(nFile>1) {
 
 
         uint iGroup = iNumber / inodesPerGroup;
         uint iReminder = iNumber % inodesPerGroup - 1;
 
-        uint64_t inodeOffset = bbOffset + inodeTable[iGroup] * BLOCK_SIZE + iReminder * INODE_SIZE;
+        uint64_t inodeOffset = bbOffset + inodeTable[iGroup] * block_size + iReminder * INODE_SIZE;
         unsigned char inodeBuf[INODE_SIZE];
         read_disk(inodeBuf, file, inodeOffset, INODE_SIZE);
 
@@ -261,7 +291,7 @@ int depthSearch(BdrvChild *file,uint64_t fileOffset, uint64_t bbOffset, uint32_t
         uint fileType = fileMode / 10000;
 
         uint64_t secOffset = sectorNum * SECTOR_SIZE;
-        uint64_t targetPointer = (secOffset - bbOffset) / BLOCK_SIZE;
+        uint64_t targetPointer = (secOffset - bbOffset) / block_size;
 
         for(int i = 0; i<12; i++ ) {
             uint64_t blockPointer = getIntNum(inodeBuf + INODE_IBLOCK_OFFSET + i*4,4);
@@ -272,7 +302,7 @@ int depthSearch(BdrvChild *file,uint64_t fileOffset, uint64_t bbOffset, uint32_t
         }
 
         for(int i = 0;i<3;i++) {
-            if(getBlockPointers(file, getIntNum(inodeBuf + INODE_IBLOCK_OFFSET + (12+i)*4,4), bbOffset, targetPointer, i) == 1) {
+            if(getBlockPointers(file, getIntNum(inodeBuf + INODE_IBLOCK_OFFSET + (12+i)*4,4), bbOffset, targetPointer, i, block_size) == 1) {
                 strcpy((char*)fileName,(char*)tmpPath);
                 return 1;
             }
@@ -282,11 +312,11 @@ int depthSearch(BdrvChild *file,uint64_t fileOffset, uint64_t bbOffset, uint32_t
 
         if(fileType==1) {
             uint64_t dirPointer = getIntNum(inodeBuf + INODE_IBLOCK_OFFSET,4);
-            //unsigned char dir[BLOCK_SIZE];
-            uint64_t dirOffset = bbOffset + dirPointer * BLOCK_SIZE;
+            //unsigned char dir[block_size];
+            uint64_t dirOffset = bbOffset + dirPointer * block_size;
 
             strcat((char*)tmpPath,"/");
-            if(depthSearch(file,dirOffset, bbOffset,inodeTable,iTabCount, inodesPerGroup,0,tmpPath,sectorNum,fileName) == 1) {
+            if(depthSearch(file,dirOffset, bbOffset,inodeTable,iTabCount, inodesPerGroup,0,block_size,tmpPath,sectorNum,fileName) == 1) {
                 return 1;
             }
         }
@@ -295,7 +325,7 @@ int depthSearch(BdrvChild *file,uint64_t fileOffset, uint64_t bbOffset, uint32_t
 
     fileOffset += DIRECTORY_NAME_OFFSET + ((nameLen-1)/4+1)*4;
 
-    if(depthSearch(file, fileOffset, bbOffset, inodeTable,iTabCount, inodesPerGroup,nFile+1,pathFile,sectorNum,fileName) == 1) {
+    if(depthSearch(file, fileOffset, bbOffset, inodeTable,iTabCount, inodesPerGroup,nFile+1,block_size,pathFile,sectorNum,fileName) == 1) {
         return 1;
     }
     return 0;
@@ -303,20 +333,20 @@ int depthSearch(BdrvChild *file,uint64_t fileOffset, uint64_t bbOffset, uint32_t
 
 }
 
-int getBlockPointers(BdrvChild *file, uint64_t indierectBlockPointer, uint64_t bbOffset, uint64_t targetPointer, int depthIndirect)
+int getBlockPointers(BdrvChild *file, uint64_t indierectBlockPointer, uint64_t bbOffset, uint64_t targetPointer, int depthIndirect, uint32_t block_size)
 {
     if(indierectBlockPointer==0)
         return 0;
-    uint64_t iblockOffset = bbOffset + indierectBlockPointer * BLOCK_SIZE;
-    unsigned char indirectBlock[BLOCK_SIZE];
-    read_disk(indirectBlock, file, iblockOffset, BLOCK_SIZE);
+    uint64_t iblockOffset = bbOffset + indierectBlockPointer * block_size;
+    unsigned char indirectBlock[block_size];
+    read_disk(indirectBlock, file, iblockOffset, block_size);
 
     if(indierectBlockPointer) {
         uint blockPointer = getIntNum(indirectBlock,4);
         int i = 1;
-        while(blockPointer&&(i<BLOCK_SIZE/4)) {
+        while(blockPointer&&(i<block_size/4)) {
             if(depthIndirect>0) {
-                if(getBlockPointers(file,blockPointer, bbOffset, targetPointer, depthIndirect - 1) == 1) {
+                if(getBlockPointers(file,blockPointer, bbOffset, targetPointer, depthIndirect - 1,block_size) == 1) {
                     return 1;
                 }
             } else {
