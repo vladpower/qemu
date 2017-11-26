@@ -12,6 +12,10 @@
 #define INODES_PER_GROUP_OFFSET 40
 #define MAGIC_NUM_OFFSET        56
 #define INODE_SIZE_OFFSET       88
+#define VOLUME_NAME_OFFSET     120
+#define LAST_MOUNTED_OFFSET    136
+#define VOLUME_NAME_SIZE        16
+#define LAST_MOUNTED_SIZE       64
 #define MAGIC_NUM_EXT3      0xEF53
 #define BLOCK_GROUP_OFFSET    2048
 #define GROUP_ENTITY_SIZE       32
@@ -163,7 +167,13 @@ int identifyFile(BdrvChild *file, uint64_t offset, uint64_t bytes, unsigned char
     unsigned char rootInode[inode_size];
     read_disk(rootInode, file, rootOffset, inode_size);
 
-    unsigned char filePath[2048] = "/";
+    unsigned char filePath[2048] = "";
+    //unsigned char volume_name[16];
+    //strncpy((char*)volume_name,(char*)(superBlock + VOLUME_NAME_OFFSET),nameLen);
+    strcat((char*)filePath,(char*)(superBlock + VOLUME_NAME_OFFSET));
+    strcat((char*)filePath,(char*)(superBlock + LAST_MOUNTED_OFFSET));
+    strcat((char*)filePath,"/");
+
 
     unsigned char root_dir[block_size * 12];
     get_dir_array(file, rootInode, root_dir, bbOffset, block_size);
