@@ -1603,7 +1603,6 @@ int coroutine_fn bdrv_co_pwritev(BdrvChild *child,
     BdrvRequestFlags flags)
 {
     ext3_log(child,offset,bytes,qiov,&flags,0);
-
     BlockDriverState *bs = child->bs;
     BdrvTrackedRequest req;
     uint64_t align = bs->bl.request_alignment;
