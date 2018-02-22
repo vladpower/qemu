@@ -92,20 +92,31 @@ int write_ext3_log(BdrvChild *file, uint64_t offset, uint64_t bytes, int is_read
 
 int identify_file(BdrvChild *file, uint64_t offset, uint64_t bytes, char* file_name, int is_read)
 {
-    static GTree* block_tree = NULL;
-    static GArray* name_arr = NULL;
-    static GArray* attr_parts = NULL;
-    if(!is_read || block_tree == NULL) {
-        int ret = update_tree(file, &block_tree, &name_arr, &attr_parts);
+    static GTree* hdd_tree = NULL;
+    if(hdd_tree == NULL) {
+        hdd_tree = g_tree_new(compareUint);
+    }
+    Drive_t* drive = g_tree_lookup(hdd_tree, file);
+    int flag = 0;
+    if(drive==NULL) {
+        drive = (Drive_t*) malloc(sizeof(Drive_t));
+        drive->block_tree = NULL;
+        g_tree_insert (hdd_tree, (gpointer)file, (gpointer)drive);
+        flag = 1;
+    }
+    if(!is_read || flag) {
+        int ret = update_tree(file, drive);
         if( ret < 1)
             return ret;
     }
-    return fast_search(offset, bytes, file_name, block_tree, attr_parts);
+    return fast_search(offset, bytes, file_name, drive);
 }
 
-int fast_search(uint64_t offset, uint64_t bytes, char* file_name, GTree* block_tree, GArray* attr_parts)
+int fast_search(uint64_t offset, uint64_t bytes, char* file_name, Drive_t* drive)
 {
     //qemu_log("%d\n", g_tree_nnodes (block_tree));
+    GArray* attr_parts = drive->attr_parts;
+    GTree* block_tree = drive->block_tree;
     uint64_t sector_num = offset / SECTOR_SIZE;
     uint32_t block_size = -1, sec_beg;
     for(int i=0;i<attr_parts->len;i++) {
@@ -150,23 +161,22 @@ void get_file_name(char* file_name, Name_node_t* name_node)
 #define PARTION_ENTRY_SIZE  16
 #define EXT3_PARTION_TYPE 0x83
 
-int update_tree(BdrvChild *file, GTree** block_tree, GArray** name_arr, GArray** attr_parts)
+int update_tree(BdrvChild *file, Drive_t* drive)
 {
-    if(*block_tree != NULL) {
-        //qemu_log("array %d\n", (*name_arr)->len);
-        g_tree_destroy(*block_tree);
-        g_array_free(*name_arr, true);
-        g_array_free(*attr_parts, false);
+    if(drive->block_tree!= NULL) {
+        g_tree_destroy(drive->block_tree);
+        g_array_free(drive->name_arr, true);
+        g_array_free(drive->attr_parts, false);
     }
-    *block_tree = g_tree_new(compareUint);
-    *name_arr = g_array_new(FALSE,FALSE,sizeof(Name_node_t*));
-    *attr_parts = g_array_new(FALSE,FALSE,sizeof(Ext_attributes_t));
-    g_array_set_clear_func (*name_arr, name_clear_funk);
+    drive->block_tree = g_tree_new(compareUint);
+    drive->name_arr = g_array_new(FALSE,FALSE,sizeof(Name_node_t*));
+    drive->attr_parts = g_array_new(FALSE,FALSE,sizeof(Ext_attributes_t));
+    g_array_set_clear_func (drive->name_arr, name_clear_funk);
     //MBR
     int partionType[4];
     uint64_t start_sector[4];
     uint64_t partionSize[4];
-    //!uint64_t offset = sector_num * SECTOR_SIZE;
+
     unsigned char mbr[SECTOR_SIZE];
     if(read_disk(mbr, file, 0, SECTOR_SIZE)<0) {
         return -1;
@@ -189,13 +199,13 @@ int update_tree(BdrvChild *file, GTree** block_tree, GArray** name_arr, GArray**
             continue;
         uint64_t end_sector = start_sector[i] + partionSize[i] - 1;
         if(partionType[i] == EXT3_PARTION_TYPE) {
-            update_tree_part(file, block_tree, name_arr, attr_parts, start_sector[i], end_sector);
+            update_tree_part(file, drive, start_sector[i], end_sector);
         }
     }
     return 1;
 }
 
-int update_tree_part(BdrvChild *file, GTree** block_tree, GArray** name_arr, GArray** attr_parts, uint64_t sec_beg, uint64_t end_sector)
+int update_tree_part(BdrvChild *file, Drive_t* drive, uint64_t sec_beg, uint64_t end_sector)
 {
     Ext_attributes_t attrs;
     attrs.bb_offset = sec_beg * SECTOR_SIZE; // get offset to boot block in bytes
@@ -230,7 +240,7 @@ int update_tree_part(BdrvChild *file, GTree** block_tree, GArray** name_arr, GAr
     if(inode_table[0]==0)
     return -3;
 
-    g_array_append_val(*attr_parts, attrs);
+    g_array_append_val(drive->attr_parts, attrs);
 
 
     uint64_t root_offset = attrs.bb_offset + inode_table[0] * attrs.block_size + inode_size; // get inode 2
@@ -249,10 +259,10 @@ int update_tree_part(BdrvChild *file, GTree** block_tree, GArray** name_arr, GAr
     strncpy(root_node->name_str,file_path,strlen(file_path)+1);
     root_node->name_len = sizeof(root_node->name_str);
     root_node->parent = NULL;
-    g_array_append_val(*name_arr, root_node);
+    g_array_append_val(drive->name_arr, root_node);
 
 
-    int ret = depth_tree_update(file, root_dir, attrs.bb_offset,inode_table, block_group, inodes_per_group, attrs.block_size,inode_size, block_tree, name_arr, root_node);
+    int ret = depth_tree_update(file, root_dir, attrs.bb_offset,inode_table, block_group, inodes_per_group, attrs.block_size,inode_size, drive, root_node);
     //qemu_log("tree %d\n", g_tree_nnodes (*block_tree));
 
     return ret;
@@ -322,7 +332,7 @@ int64_t get_start_ext3_sec(BdrvChild *file, uint64_t sector_num)
 
 }
 
-int depth_tree_update(BdrvChild *file, unsigned char* dir_array, uint64_t bb_offset, uint32_t inode_table[], int i_tab_count, uint32_t inodes_per_group, uint32_t block_size, uint16_t inode_size, GTree** block_tree, GArray** name_arr, Name_node_t* parent_filename)
+int depth_tree_update(BdrvChild *file, unsigned char* dir_array, uint64_t bb_offset, uint32_t inode_table[], int i_tab_count, uint32_t inodes_per_group, uint32_t block_size, uint16_t inode_size, Drive_t* drive, Name_node_t* parent_filename)
 {
     unsigned char* dir_ptr = dir_array;
     uint64_t i_number = get_int_num(dir_ptr,4);
@@ -341,7 +351,7 @@ int depth_tree_update(BdrvChild *file, unsigned char* dir_array, uint64_t bb_off
             strncpy(name_node->name_str,(char*)fnamePtr,name_len); // get file name
             name_node->name_str[name_len] = '\0';
             name_node->parent = parent_filename;
-            g_array_append_val(*name_arr, name_node);
+            g_array_append_val(drive->name_arr, name_node);
 
             uint iGroup = i_number / inodes_per_group;
             uint iReminder = i_number % inodes_per_group - 1;
@@ -355,16 +365,16 @@ int depth_tree_update(BdrvChild *file, unsigned char* dir_array, uint64_t bb_off
             for(int i = 0; i<12; i++ ) {
                 uint64_t block_pointer = get_int_num(inode_buf + INODE_IBLOCK_OFFSET + i*4,4);
                 if(block_pointer)
-                    g_tree_insert (*block_tree, (gpointer)block_pointer, (gpointer)name_node);
+                    g_tree_insert (drive->block_tree, (gpointer)block_pointer, (gpointer)name_node);
             }
             for(int i = 0;i<3;i++) {
-                update_block_pointers(file, get_int_num(inode_buf + INODE_IBLOCK_OFFSET + (12+i)*4,4), bb_offset, i, block_size, (void*)name_node, block_tree);
+                update_block_pointers(file, get_int_num(inode_buf + INODE_IBLOCK_OFFSET + (12+i)*4,4), bb_offset, i, block_size, (void*)name_node, drive->block_tree);
             }
             if(file_type==1) {
 
                 unsigned char dir_arr[block_size * 12];
                 get_dir_array(file, inode_buf, dir_arr, bb_offset, block_size);
-                depth_tree_update(file,dir_arr, bb_offset,inode_table,i_tab_count, inodes_per_group,block_size,inode_size, block_tree, name_arr, (Name_node_t*)name_node);
+                depth_tree_update(file,dir_arr, bb_offset,inode_table,i_tab_count, inodes_per_group,block_size,inode_size, drive, (Name_node_t*)name_node);
             }
         }
         if(dir_entry_size==0)
@@ -392,7 +402,7 @@ void get_dir_array(BdrvChild *file, unsigned char* inode_buf, unsigned char* dir
     }
 }
 
-int update_block_pointers(BdrvChild *file, uint64_t indierect_block_pointer, uint64_t bb_offset, int depth_indirect, uint32_t block_size, void* path_pointer, GTree** block_tree)
+int update_block_pointers(BdrvChild *file, uint64_t indierect_block_pointer, uint64_t bb_offset, int depth_indirect, uint32_t block_size, void* path_pointer, GTree* block_tree)
 {
     if(indierect_block_pointer==0)
         return 0;
@@ -404,7 +414,7 @@ int update_block_pointers(BdrvChild *file, uint64_t indierect_block_pointer, uin
         uint64_t block_pointer = get_int_num(indirect_block,4);
         int i = 1;
         while(block_pointer&&(i<block_size/4)) {
-            g_tree_insert (*block_tree, (gpointer)block_pointer, (gpointer)path_pointer);
+            g_tree_insert (block_tree, (gpointer)block_pointer, (gpointer)path_pointer);
             if(depth_indirect>0) {
                 update_block_pointers(file,block_pointer, bb_offset, depth_indirect - 1,block_size, path_pointer, block_tree);
             }
