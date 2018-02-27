@@ -2,7 +2,9 @@
 #include <stdlib.h>
 #include <time.h>
 #include <math.h>
-//#include <glib.h>
+
+#include <sys/types.h>
+#include <sys/syscall.h>
 
 #define SECTOR_SIZE            512
 #define BLOCK_SIZE            1024 // !!s_log_block_size!!
@@ -45,7 +47,7 @@ int read_disk(unsigned char* buf, BdrvChild *file, uint64_t offset, size_t len)
     QEMUIOVector qiov;
     qemu_iovec_init(&qiov, len);
     qemu_iovec_add(&qiov, &tmp_buf, len);
-    bdrv_co_preadv(file, offset, len, &qiov, BDRV_REQ_NO_LOG);
+    bdrv_co_preadv(file, offset, len, &qiov, 0);
     size_t recv_len = 0;
     while(recv_len<len)
         recv_len += qemu_iovec_to_buf(&qiov, recv_len, buf, len - recv_len);
@@ -55,39 +57,41 @@ int read_disk(unsigned char* buf, BdrvChild *file, uint64_t offset, size_t len)
 
 inline void ext3_log(BdrvChild *child,
     int64_t offset, unsigned int bytes, QEMUIOVector *qiov,
-    BdrvRequestFlags* flags, int is_read) {
+    BdrvRequestFlags flags, int is_read) {
         if (qemu_loglevel_mask(DRIVE_LOG_EXT3) ) {
-            if(*flags  != BDRV_REQ_NO_LOG) {
-                write_ext3_log(child,offset,bytes,is_read);
-            } else {
-                *flags = 0;
-            }
+            write_ext3_log(child,offset,bytes,is_read);
         }
-}
+    }
 
 int write_ext3_log(BdrvChild *file, uint64_t offset, uint64_t bytes, int is_read )
 {
-        char file_name[2048] = "";
-        uint64_t sec = offset / SECTOR_SIZE;
-        int ret = identify_file(file, offset, bytes, file_name, is_read);
-        switch (ret) {
-            case 0: {
-                //qemu_log("%"PRIu64"\t %"PRIu64"\t file not found\n", sec,bytes);
-            }
-            break;
-            case 1: {
-                qemu_log("%s\t%"PRIu64" \t%"PRIu64"\t %s\n",is_read?"read":"write", sec,bytes, file_name);
-            }
-            break;
-            case -2: {
-                //qemu_log("%"PRIu64"\t %"PRIu64"\t file is not in ext3\n",sec,bytes);
-            }
-            break;
-            default: {
-                //qemu_log("%"PRIu64"\t %"PRIu64"\t Error %d\n",sec,bytes,ret);
-            }
+    // static QemuMutex file_search_lock;
+    // if(!file_search_lock.initialized) {
+    //     qemu_mutex_init(&file_search_lock);
+    // }
+    // qemu_mutex_lock(&file_search_lock);
+    char file_name[2048] = "";
+    uint64_t sec = offset / SECTOR_SIZE;
+    int ret = identify_file(file, offset, bytes, file_name, is_read);
+    switch (ret) {
+        case 0: {
+            //qemu_log("%"PRIu64"\t %"PRIu64"\t file not found\n", sec,bytes);
         }
-        return 0;
+        break;
+        case 1: {
+            qemu_log("%s\t%"PRIu64" \t%"PRIu64"\t %s\n",is_read?"read":"write", sec,bytes, file_name);
+        }
+        break;
+        case -2: {
+            //qemu_log("%"PRIu64"\t %"PRIu64"\t file is not in ext3\n",sec,bytes);
+        }
+        break;
+        default: {
+            //qemu_log("%"PRIu64"\t %"PRIu64"\t Error %d\n",sec,bytes,ret);
+        }
+    }
+    //qemu_mutex_unlock(&file_search_lock);
+    return 0;
 }
 
 int identify_file(BdrvChild *file, uint64_t offset, uint64_t bytes, char* file_name, int is_read)
@@ -352,7 +356,7 @@ int depth_tree_update(BdrvChild *file, unsigned char* dir_array, uint64_t bb_off
             name_node->name_str[name_len] = '\0';
             name_node->parent = parent_filename;
             g_array_append_val(drive->name_arr, name_node);
-
+            //qemu_log("%s\n", name_node->name_str);
             uint iGroup = i_number / inodes_per_group;
             uint iReminder = i_number % inodes_per_group - 1;
             if(iGroup >= i_tab_count)

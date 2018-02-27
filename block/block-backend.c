@@ -21,6 +21,7 @@
 #include "qemu/id.h"
 #include "trace.h"
 #include "migration/misc.h"
+#include "block/ext3_identifier.h"
 
 /* Number of coroutines to reserve per attached device model */
 #define COROUTINE_POOL_RESERVATION 64
@@ -1102,6 +1103,7 @@ int coroutine_fn blk_co_preadv(BlockBackend *blk, int64_t offset,
                 bytes, false);
     }
 
+    ext3_log(blk->root, offset, bytes, qiov, flags,1); // 1 means read operation
     ret = bdrv_co_preadv(blk->root, offset, bytes, qiov, flags);
     bdrv_dec_in_flight(bs);
     return ret;
@@ -1131,7 +1133,7 @@ int coroutine_fn blk_co_pwritev(BlockBackend *blk, int64_t offset,
     if (!blk->enable_write_cache) {
         flags |= BDRV_REQ_FUA;
     }
-
+    ext3_log(blk->root, offset, bytes, qiov, flags,0); // 0 means write operation
     ret = bdrv_co_pwritev(blk->root, offset, bytes, qiov, flags);
     bdrv_dec_in_flight(bs);
     return ret;

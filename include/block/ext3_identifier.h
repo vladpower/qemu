@@ -8,6 +8,7 @@
 #include "exec/log.h"
 #include <glib.h>
 
+
 typedef struct Name_node{
     char* name_str;
     uint16_t name_len;
@@ -26,12 +27,11 @@ typedef struct Drive{
     GArray* attr_parts;
 } Drive_t;
 
-
 gint compareUint(gconstpointer a, gconstpointer b);
 void name_clear_funk(gpointer data);
 void ext3_log(BdrvChild *child,
      int64_t offset, unsigned int bytes, QEMUIOVector *qiov,
-     BdrvRequestFlags *flags, int is_read);
+     BdrvRequestFlags flags, int is_read);
 int write_ext3_log(BdrvChild *file, uint64_t offset, uint64_t bytes, int is_read);
 int read_disk(unsigned char* buf, BdrvChild *file, uint64_t offset, size_t len);
 int identify_file(BdrvChild *file, uint64_t offset, uint64_t bytes, char* file_name, int is_read);
