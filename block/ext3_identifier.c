@@ -25,10 +25,15 @@
 #define INODE_TABLE_OFFSET       8
 #define INODE_COUNT_OFFSET      16
 #define INODE_SIZE             128
+#define INODE_FILE_SIZE_OFFSET   8
+#define INODE_FLAGS_OFFSET      32
 #define INODE_IBLOCK_OFFSET     40
 #define DIRECTORY_SIZE_OFFSET    4
 #define DIRECTORY_NAMELEN_OFFSET 6
+#define DIRECTORY_FTYPE_OFFSET   7 // only ext3
 #define DIRECTORY_NAME_OFFSET    8
+
+
 
 gint compareUint(gconstpointer a, gconstpointer b) {
     return a-b;
@@ -51,6 +56,7 @@ int read_disk(unsigned char* buf, BdrvChild *file, uint64_t offset, size_t len)
     size_t recv_len = 0;
     while(recv_len<len)
         recv_len += qemu_iovec_to_buf(&qiov, recv_len, buf, len - recv_len);
+    qemu_iovec_destroy(&qiov);
     return 0;
 
 }
@@ -65,11 +71,6 @@ inline void ext3_log(BdrvChild *child,
 
 int write_ext3_log(BdrvChild *file, uint64_t offset, uint64_t bytes, int is_read )
 {
-    // static QemuMutex file_search_lock;
-    // if(!file_search_lock.initialized) {
-    //     qemu_mutex_init(&file_search_lock);
-    // }
-    // qemu_mutex_lock(&file_search_lock);
     char file_name[2048] = "";
     uint64_t sec = offset / SECTOR_SIZE;
     int ret = identify_file(file, offset, bytes, file_name, is_read);
@@ -90,7 +91,6 @@ int write_ext3_log(BdrvChild *file, uint64_t offset, uint64_t bytes, int is_read
             //qemu_log("%"PRIu64"\t %"PRIu64"\t Error %d\n",sec,bytes,ret);
         }
     }
-    //qemu_mutex_unlock(&file_search_lock);
     return 0;
 }
 
@@ -101,28 +101,32 @@ int identify_file(BdrvChild *file, uint64_t offset, uint64_t bytes, char* file_n
         hdd_tree = g_tree_new(compareUint);
     }
     Drive_t* drive = g_tree_lookup(hdd_tree, file);
-    int flag = 0;
+    int ret_srch;
     if(drive==NULL) {
         drive = (Drive_t*) malloc(sizeof(Drive_t));
         drive->block_tree = NULL;
         g_tree_insert (hdd_tree, (gpointer)file, (gpointer)drive);
-        flag = 1;
+        update_tree(file, drive);
+        ret_srch = fast_search(offset, bytes, file_name, drive);
+    } else {
+        ret_srch = fast_search(offset, bytes, file_name, drive);
+        if(!is_read && ret_srch != 1) {
+            clock_t before = clock();
+            update_tree(file, drive);
+            clock_t difference = clock() - before;
+            int msec = difference * 1000 / CLOCKS_PER_SEC;
+            qemu_log("write operation: %d ms\n", msec);
+        }
     }
-    if(!is_read || flag) {
-        int ret = update_tree(file, drive);
-        if( ret < 1)
-            return ret;
-    }
-    return fast_search(offset, bytes, file_name, drive);
+    return ret_srch;
 }
 
 int fast_search(uint64_t offset, uint64_t bytes, char* file_name, Drive_t* drive)
 {
-    //qemu_log("%d\n", g_tree_nnodes (block_tree));
     GArray* attr_parts = drive->attr_parts;
     GTree* block_tree = drive->block_tree;
     uint64_t sector_num = offset / SECTOR_SIZE;
-    uint32_t block_size = -1, sec_beg;
+    uint32_t block_size = -1, sec_beg = -1;
     for(int i=0;i<attr_parts->len;i++) {
         Ext_attributes_t attrs = g_array_index(attr_parts,Ext_attributes_t, i);
         if(attrs.bb_offset <= offset && offset <= attrs.end_offset) {
@@ -137,8 +141,6 @@ int fast_search(uint64_t offset, uint64_t bytes, char* file_name, Drive_t* drive
     }
 
     gpointer value  = g_tree_lookup (block_tree, (gconstpointer) ((sector_num - sec_beg) / (block_size / SECTOR_SIZE)));
-    //gpointer value = g_tree_search (block_tree, compareUint, (gconstpointer) offset);
-    //map<uint,uint>::iterator it = sectorFile.find( (sector_num - sec_beg) / (BLOCK_SIZE / SECTOR_SIZE) );
     if(value != NULL) {
         Name_node_t* name_node = (Name_node_t*)value;
         get_file_name(file_name, name_node);
@@ -336,18 +338,53 @@ int64_t get_start_ext3_sec(BdrvChild *file, uint64_t sector_num)
 
 }
 
+#define EXT3_FT_DIR		2
+#define EXT3_DIR_PAD			4
+#define EXT3_DIR_ROUND			(EXT3_DIR_PAD - 1)
+#define EXT3_DIR_REC_LEN(name_len)	(((name_len) + 8 + EXT3_DIR_ROUND) & \
+					 ~EXT3_DIR_ROUND)
+#define EXT3_MAX_REC_LEN		((1<<16)-1)
+
+int ext3_check_dir_entry (uint16_t rlen, uint16_t name_len, unsigned char* dir_ptr, unsigned char* dir_array, 
+                          uint32_t block_size, uint64_t inode_num, uint64_t inodes_count)
+{
+	const char * error_msg = NULL;
+
+	if (rlen < EXT3_DIR_REC_LEN(1))
+		error_msg = "rec_len is smaller than minimal";
+	else if (rlen % 4 != 0)
+		error_msg = "rec_len % 4 != 0";
+	else if (rlen < EXT3_DIR_REC_LEN(name_len))
+		error_msg = "rec_len is too small for name_len";
+	else if ((dir_ptr - dir_array) % block_size + rlen > block_size)
+		error_msg = "directory entry across blocks";
+	else if (inode_num > inodes_count)
+		error_msg = "inode out of bounds";
+
+	// if (error_msg != NULL)
+	// 	qemu_log("bad entry in directory #%lu: %s - "
+	// 		     "rec_len=%d, name_len=%d\n",
+    //              inode_num, error_msg,
+	// 		     rlen, name_len);
+	return error_msg == NULL ? 1 : 0;
+}
+
+
 int depth_tree_update(BdrvChild *file, unsigned char* dir_array, uint64_t bb_offset, uint32_t inode_table[], int i_tab_count, uint32_t inodes_per_group, uint32_t block_size, uint16_t inode_size, Drive_t* drive, Name_node_t* parent_filename)
 {
     unsigned char* dir_ptr = dir_array;
     uint64_t i_number = get_int_num(dir_ptr,4);
     uint16_t dir_entry_size;
-    if(i_number==0)
+    if(i_number==0) {
+        //qemu_log("inode doesn't exist\n");
         return -3;
+    }
     uint32_t n_file = 0;
     do {
         dir_entry_size = get_int_num(dir_ptr + DIRECTORY_SIZE_OFFSET,2);
         uint32_t name_len = get_int_num(dir_ptr + DIRECTORY_NAMELEN_OFFSET,1);
-        if(n_file>2 && name_len > 0 && name_len < 256) { // if file isn't current or parent dirrectory
+        uint32_t file_type = get_int_num(dir_ptr + DIRECTORY_FTYPE_OFFSET, 1);
+        if(n_file>1 && name_len > 0 && name_len < 256) { // if file isn't current or parent dirrectory
             unsigned char *fnamePtr = dir_ptr + DIRECTORY_NAME_OFFSET;
             Name_node_t* name_node = (Name_node_t*)malloc(sizeof(Name_node_t));
             name_node->name_len = name_len;
@@ -355,45 +392,79 @@ int depth_tree_update(BdrvChild *file, unsigned char* dir_array, uint64_t bb_off
             strncpy(name_node->name_str,(char*)fnamePtr,name_len); // get file name
             name_node->name_str[name_len] = '\0';
             name_node->parent = parent_filename;
+            // if(strcmp(parent_filename->name_str,"/")==0) {
+            //     printf("/");
+            // }
+            // if(i_number == 2) {
+            //     printf("%s\n",name_node->name_str);
+            // }
             g_array_append_val(drive->name_arr, name_node);
             //qemu_log("%s\n", name_node->name_str);
-            uint iGroup = i_number / inodes_per_group;
-            uint iReminder = i_number % inodes_per_group - 1;
-            if(iGroup >= i_tab_count)
+            uint iGroup = (i_number - 1) / inodes_per_group;
+            uint iReminder = (i_number-1) % inodes_per_group;
+            if(iGroup >= i_tab_count) {
+                
                 return -3; // if inode doesn't exist
-            uint64_t inode_offset = bb_offset + inode_table[iGroup] * block_size + iReminder * inode_size;
+            }
+            //qemu_log("%s - %d\n",name_node->name_str, file_type);
+            uint64_t inode_offset = bb_offset + (uint64_t)inode_table[iGroup] * block_size + iReminder * inode_size;
             unsigned char inode_buf[inode_size];
             read_disk(inode_buf, file, inode_offset, inode_size); // get inode
-            uint file_mode = get_int_num(inode_buf,4);
-            uint file_type = file_mode / 10000;
+            // uint file_mode = get_int_num(inode_buf,4);
+            // uint file_type = file_mode / 10000; //dir type 0x4
+            //uint64_t inode_flags = get_int_num(inode_buf + INODE_FLAGS_OFFSET,4);
             for(int i = 0; i<12; i++ ) {
                 uint64_t block_pointer = get_int_num(inode_buf + INODE_IBLOCK_OFFSET + i*4,4);
-                if(block_pointer)
+                if(block_pointer) {
+                    gpointer value  = g_tree_lookup (drive->block_tree, (gpointer)block_pointer);
+                    if(value != NULL) {
+                        return 0;
+                    }
                     g_tree_insert (drive->block_tree, (gpointer)block_pointer, (gpointer)name_node);
+                }
             }
             for(int i = 0;i<3;i++) {
                 update_block_pointers(file, get_int_num(inode_buf + INODE_IBLOCK_OFFSET + (12+i)*4,4), bb_offset, i, block_size, (void*)name_node, drive->block_tree);
             }
-            if(file_type==1) {
-
-                unsigned char dir_arr[block_size * 12];
-                get_dir_array(file, inode_buf, dir_arr, bb_offset, block_size);
-                depth_tree_update(file,dir_arr, bb_offset,inode_table,i_tab_count, inodes_per_group,block_size,inode_size, drive, (Name_node_t*)name_node);
+            if(file_type==EXT3_FT_DIR) {
+                //if(!is_dx_dir(inode_flags)) {
+                    unsigned char dir_arr[block_size * 12];
+                    get_dir_array(file, inode_buf, dir_arr, bb_offset, block_size);
+                    depth_tree_update(file,dir_arr, bb_offset,inode_table,i_tab_count, inodes_per_group,block_size,inode_size, drive, (Name_node_t*)name_node);
+                //}
             }
         }
-        if(dir_entry_size==0)
-            return 0;
-        if(dir_entry_size > (DIRECTORY_NAME_OFFSET + ((name_len-1)/4+1)*4)*2)
-            return 0;
+        // if(dir_entry_size==0)
+        //     return 0;
+        // if(dir_entry_size > (DIRECTORY_NAME_OFFSET + ((name_len-1)/4+1)*4)*2)
+        //     return 0;
 
-        dir_ptr += dir_entry_size;
+        if (ext3_check_dir_entry(dir_entry_size, name_len, dir_ptr, dir_array,
+                                 block_size, i_number, i_tab_count * inodes_per_group))
+        {
+            dir_ptr += dir_entry_size;
+        } else {
+            dir_ptr += block_size - ((dir_ptr - dir_array) % block_size);
+            if(n_file<2)
+                n_file = 2;
+        }
         if((dir_array - dir_ptr) > block_size*12)
             return -9;
         i_number = get_int_num(dir_ptr,4);
         n_file++;
-    } while(i_number && dir_entry_size);
+    } while(i_number);
     return 0;
 
+}
+
+#define EXT3_INDEX_FL			0x00001000 /* hash-indexed directory */
+int is_dx_dir(uint64_t flags)
+{
+	if(flags & EXT3_INDEX_FL) {
+        return 1;
+    }
+
+	return 0;
 }
 
 void get_dir_array(BdrvChild *file, unsigned char* inode_buf, unsigned char* dir_array, uint64_t bb_offset, uint32_t block_size)
@@ -401,6 +472,7 @@ void get_dir_array(BdrvChild *file, unsigned char* inode_buf, unsigned char* dir
     uint64_t dirPointer = get_int_num(inode_buf + INODE_IBLOCK_OFFSET,4);
     for(int i = 0; i < 12 && dirPointer; i++) {
         uint64_t dirOffset = bb_offset + dirPointer * block_size;
+        //qemu_log("dir_offset %"PRIu64"\n",dirOffset);
         read_disk(dir_array + i*block_size, file, dirOffset, block_size);
         dirPointer = get_int_num(inode_buf + INODE_IBLOCK_OFFSET + (i+1)*4,4);
     }
@@ -418,6 +490,10 @@ int update_block_pointers(BdrvChild *file, uint64_t indierect_block_pointer, uin
         uint64_t block_pointer = get_int_num(indirect_block,4);
         int i = 1;
         while(block_pointer&&(i<block_size/4)) {
+            gpointer value  = g_tree_lookup (block_tree, (gpointer)block_pointer);
+            if(value != NULL) {
+                return 0;
+            }
             g_tree_insert (block_tree, (gpointer)block_pointer, (gpointer)path_pointer);
             if(depth_indirect>0) {
                 update_block_pointers(file,block_pointer, bb_offset, depth_indirect - 1,block_size, path_pointer, block_tree);

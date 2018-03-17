@@ -42,8 +42,11 @@ unsigned long  get_int_num(unsigned char* it, int n);
 int64_t get_start_ext3_sec(BdrvChild *file, uint64_t sector_num);
 int check_range_sec(BdrvChild *file, uint64_t sector_num);
 void get_file_name(char* file_name, Name_node_t* name_node);
+int ext3_check_dir_entry (uint16_t rlen, uint16_t name_len, unsigned char* dir_ptr, unsigned char* dir_array, 
+                          uint32_t block_size, uint64_t inode_num, uint64_t inodes_count);
 int depth_tree_update(BdrvChild *file, unsigned char* dir_array, uint64_t bb_offset, uint32_t inode_table[], int i_tab_count, uint32_t inodes_per_group, uint32_t block_size, uint16_t inode_size, Drive_t* drive, Name_node_t* parent_filename);
 int update_block_pointers(BdrvChild *file, uint64_t indierect_block_pointer, uint64_t bb_offset, int depth_indirect, uint32_t block_size, void* path_pointer, GTree* block_tree);
 void get_dir_array(BdrvChild *file, unsigned char* inode_buf, unsigned char* dir_array, uint64_t bb_offset, uint32_t block_size);
+int is_dx_dir(uint64_t flags);
 
 #endif
