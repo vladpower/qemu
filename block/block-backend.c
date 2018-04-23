@@ -1102,8 +1102,8 @@ int coroutine_fn blk_co_preadv(BlockBackend *blk, int64_t offset,
         throttle_group_co_io_limits_intercept(&blk->public.throttle_group_member,
                 bytes, false);
     }
-    ret = bdrv_co_preadv(blk->root, offset, bytes, qiov, flags);
     ext3_log(blk->root, offset, bytes, qiov, flags,1); // 1 means read operation
+    ret = bdrv_co_preadv(blk->root, offset, bytes, qiov, flags);
     bdrv_dec_in_flight(bs);
     return ret;
 }
@@ -1132,8 +1132,9 @@ int coroutine_fn blk_co_pwritev(BlockBackend *blk, int64_t offset,
     if (!blk->enable_write_cache) {
         flags |= BDRV_REQ_FUA;
     }
-    ret = bdrv_co_pwritev(blk->root, offset, bytes, qiov, flags);
     ext3_log(blk->root, offset, bytes, qiov, flags,0); // 0 means write operation
+    ret = bdrv_co_pwritev(blk->root, offset, bytes, qiov, flags);
+    
     bdrv_dec_in_flight(bs);
     return ret;
 }
