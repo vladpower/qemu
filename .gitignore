@@ -122,6 +122,7 @@
 /vhost-user-scsi
 /vhost-user-blk
 /fsdev/virtfs-proxy-helper
+/bin/*
 *.tmp
 *.[1-9]
 *.a
