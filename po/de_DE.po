@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: QEMU 1.4.50\n"
 "Report-Msgid-Bugs-To: qemu-devel@nongnu.org\n"
-"POT-Creation-Date: 2016-12-13 21:46+0000\n"
+"POT-Creation-Date: 2018-05-31 22:24+0300\n"
 "PO-Revision-Date: 2012-02-28 16:00+0100\n"
 "Last-Translator: Kevin Wolf <kwolf@redhat.com>\n"
 "Language-Team: Deutsch <de@li.org>\n"
@@ -16,74 +16,78 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n!=1);\n"
 
-#: ui/gtk.c:275
+#: ui/gtk.c:344
 msgid " - Press Ctrl+Alt+G to release grab"
 msgstr " - Strg+Alt+G drücken, um Eingabegeräte freizugeben"
 
-#: ui/gtk.c:279
+#: ui/gtk.c:348
 msgid " [Paused]"
 msgstr " [Angehalten]"
 
-#: ui/gtk.c:1922
+#: ui/gtk.c:2110
 msgid "_Pause"
 msgstr "_Angehalten"
 
-#: ui/gtk.c:1928
+#: ui/gtk.c:2116
 msgid "_Reset"
 msgstr "_Reset"
 
-#: ui/gtk.c:1931
+#: ui/gtk.c:2119
 msgid "Power _Down"
 msgstr "_Herunterfahren"
 
-#: ui/gtk.c:1937
+#: ui/gtk.c:2125
 msgid "_Quit"
 msgstr "_Beenden"
 
-#: ui/gtk.c:2029
+#: ui/gtk.c:2220
 msgid "_Fullscreen"
 msgstr "_Vollbild"
 
-#: ui/gtk.c:2032
+#: ui/gtk.c:2223
 msgid "_Copy"
 msgstr "_Kopieren"
 
-#: ui/gtk.c:2048
+#: ui/gtk.c:2239
 msgid "Zoom _In"
 msgstr "_Heranzoomen"
 
-#: ui/gtk.c:2055
+#: ui/gtk.c:2248
 msgid "Zoom _Out"
 msgstr "_Wegzoomen"
 
-#: ui/gtk.c:2062
+#: ui/gtk.c:2255
 msgid "Best _Fit"
 msgstr "_Einpassen"
 
-#: ui/gtk.c:2069
+#: ui/gtk.c:2262
 msgid "Zoom To _Fit"
 msgstr "Auf _Fenstergröße skalieren"
 
-#: ui/gtk.c:2075
+#: ui/gtk.c:2268
 msgid "Grab On _Hover"
 msgstr "Tastatur _automatisch einfangen"
 
-#: ui/gtk.c:2078
+#: ui/gtk.c:2271
 msgid "_Grab Input"
 msgstr "_Eingabegeräte einfangen"
 
-#: ui/gtk.c:2107
+#: ui/gtk.c:2300
 msgid "Show _Tabs"
 msgstr "Reiter anzeigen"
 
-#: ui/gtk.c:2110
+#: ui/gtk.c:2303
 msgid "Detach Tab"
 msgstr "Reiter abtrennen"
 
-#: ui/gtk.c:2122
+#: ui/gtk.c:2307
+msgid "Show Menubar"
+msgstr ""
+
+#: ui/gtk.c:2330
 msgid "_Machine"
 msgstr "_Maschine"
 
-#: ui/gtk.c:2127
+#: ui/gtk.c:2335
 msgid "_View"
 msgstr "_Ansicht"
