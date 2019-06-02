@@ -42,6 +42,8 @@ typedef struct Ext_attributes{
     //GTree* copy_file_tree;
 } Ext_attributes_t;
 
+Inode_t *get_inode_for_num(Ext_attributes_t *attrs, uint32_t inode_num);
+
 typedef struct Ext_node
 {
     Inode_t *inode;
@@ -50,6 +52,7 @@ typedef struct Ext_node
 
 Ext_node_t *ext_node_init(Inode_t* inode);
 void ext_node_set_type(Ext_node_t *ext_node, uint8_t type);
+Inode_t *get_inode_for_ext_node(Ext_node_t *ext_node);
 #if !defined(G_HASH_TEST) && !defined(G_TREE_TEST)
 void range_block_insert(Ext_attributes_t *attrs, Range* range, Ext_node_t* ext_node);
 void range_block_remove(Ext_attributes_t *attrs, Range* range);
@@ -93,9 +96,7 @@ typedef struct Inode
 
 Inode_t *inode_init(Ext_attributes_t* attrs, uint32_t inode_num);
 void inode_set_type(Inode_t *inode, uint8_t type);
-void inode_link_delete(Inode_t *inode, Ext_dir_entry_t *del_file);
-Inode_t *get_inode_for_num(Ext_attributes_t *attrs, uint32_t inode_num);
-Inode_t *get_inode_for_ext_node(Ext_node_t *ext_node);
+void inode_link_delete(Ext_attributes_t* attrs, Inode_t *inode, Ext_dir_entry_t *del_file);
 
 /**
  * Finds file name by inode number.
@@ -300,9 +301,9 @@ void log_range_lost_ops(Ext_attributes_t *attrs, Range* obj_range, Ext_node_t *e
  * Used only for debugging.
  */
 void log_change_size(char is_changed, Ext_node_t *ext_node, int64_t count_old_blocks, int64_t count_new_blocks);
-void log_move(Name_node_t *name_node, Name_node_t *dir_node, Ext_dir_entry_t *new_file);
+void log_move(Name_node_t *name_node, Inode_t *inode);
 void log_rename_op(char* old_name, char* new_name, Name_node_t *name_node);
-void log_link_add(Name_node_t *name_node);
+void log_link_add(Name_node_t *name_node, Inode_t *inode);
 void log_link_delete(Name_node_t *name_node);
 void log_create(Name_node_t *name_node);
 void log_delete(Name_node_t *name_node);

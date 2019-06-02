@@ -314,7 +314,7 @@ void inode_set_type(Inode_t *inode, uint8_t type)
     ext_node_set_type(ext_node, type);
 }
 
-void inode_link_delete(Inode_t *inode, Ext_dir_entry_t *del_file)
+void inode_link_delete(Ext_attributes_t* attrs, Inode_t *inode, Ext_dir_entry_t *del_file)
 {
     char del_name[2048] = "";
     get_name_for_dir_entry(del_name, del_file);
@@ -334,12 +334,15 @@ void inode_link_delete(Inode_t *inode, Ext_dir_entry_t *del_file)
             {
                 inode_set_type(inode, EXT_UNLINKED_FILE);
             }
-                
-            if(inode->hard_links || inode->block_count)
+            Ext_node_t *ext_node = get_ext_node_for_inode(inode);
+            if(inode->hard_links) // || inode->block_count != 0
             {
-                log_link_delete(name_node);
+                if(ext_node->type != EXT_FT_DIR)
+                    log_link_delete(name_node);
 
             } else {
+                if(ext_node->type == EXT_FT_DIR)
+                    parse_ext_inode(attrs, del_file->inode, REMOVE_ACT,  NULL);
                 inode_set_type(inode, EXT_UNLINKED_FILE);
                 log_delete(name_node);
             }
@@ -407,7 +410,12 @@ void add_link_file(Ext_attributes_t *attrs, Ext_dir_entry_t *new_file, Inode_t *
             log_create(name_node);
 
         } else {
-            log_link_add(name_node);
+            if(new_file->file_type == EXT_FT_DIR)
+            {
+                log_move(name_node, inode);
+            } else {
+                log_link_add(name_node, inode);
+            }
         }
     }
 }
@@ -659,7 +667,7 @@ void split_file_ops(Ext_attributes_t *attrs, uint64_t offset, uint64_t bytes, QE
                 qemu_log("size of shadow structures:\t%"PRIu64"\n", size);
 #endif
                 if(get_name_for_ext(file_name, ext_node))
-                    qemu_log("%s\t0x%" PRIx64 " \t0x%" PRIx64 "\t %s\n", is_read ? "read" : "write", op_sec, op_bytes, file_name);
+                    qemu_log("%s\t0x%" PRIx64 " \t%" PRIu64 "\t %s\n", is_read ? "read" : "write", op_sec, op_bytes, file_name);
                 
             }
         }
@@ -771,7 +779,7 @@ gboolean delete_file_link(gpointer key, gpointer value, gpointer data)
 
     if(inode != NULL) 
     {
-        inode_link_delete(inode, old_file);
+        inode_link_delete(attrs, inode, old_file);
         // log_delete(ext_node);
         // g_tree_remove(attrs->new_inode_tree, (gpointer)(uint64_t)old_file->inode);
         // free_indir_struct(ext_node);
@@ -960,7 +968,7 @@ uint64_t inode_ext2_update_shadow(Ext_attributes_t *attrs, uint8_t *new_inode_bu
                 {
                     uint8_t *dir_arr = (uint8_t *)g_malloc0(attrs->block_size * MAX_DIR_SIZE);
                     get_dir_array(attrs, new_inode_buf - INODE_IBLOCK_OFFSET, dir_arr, false);
-                    parse_ext_directory(attrs, dir_arr, UPDATE_ACT, NULL);
+                    parse_ext_directory(attrs, dir_arr, UPDATE_ACT, ext_node);
                     g_free(dir_arr);
                 }
             }
@@ -1045,33 +1053,6 @@ void itable_update_shadow(Ext_attributes_t *attrs, uint8_t *new_data, uint8_t *o
         uint64_t inode_flags = get_int_num(old_data + i * attrs->inode_size + INODE_FLAGS_OFFSET,4);
         bool is_extent_en = inode_flags & EXT4_EXTENTS_FL;
         inode->is_extent_en = is_extent_en;
-        /* uint64_t first_block_pointer = get_first_block(old_inode_buf - INODE_IBLOCK_OFFSET, is_extent_en);
-        if (first_block_pointer)
-            name_node = (Name_node_t *)block_lookup(attrs, first_block_pointer);
-        if (name_node == NULL)
-        {
-            name_node = (Name_node_t *)g_tree_lookup(attrs->inode_tree, (gpointer)inode);
-            if (name_node == NULL)
-            {
-                for (int j = 0; j < attrs->inode_size; j++)
-                {
-                    // uint64_t old_block_pointer = get_int_num(old_inode_bus + j * 4, 4);
-                    // uint64_t new_block_pointer = get_int_num(new_inode_buf + j * 4, 4);
-                    if (old_data[i * attrs->inode_size + j] != new_data[i * attrs->inode_size + j])
-                    {
-                        g_tree_insert(attrs->last_inode_tree, (gpointer)inode, (gpointer)inode);
-                        is_changed = true;
-                        break;
-                    }
-                }
-                continue;
-            }
-            else
-            {
-                g_tree_remove(attrs->new_inode_tree, (gpointer)inode);
-                is_old_file = false;
-            }
-        } */
         int64_t count_new_blocks = 0;
         if (is_extent_en)
         {
@@ -1084,7 +1065,7 @@ void itable_update_shadow(Ext_attributes_t *attrs, uint8_t *new_data, uint8_t *o
         {
             uint8_t *dir_arr = (uint8_t *)g_malloc0(attrs->block_size * MAX_DIR_SIZE);
             get_dir_array(attrs, old_inode_buf - INODE_IBLOCK_OFFSET, dir_arr, is_extent_en);
-            parse_ext_directory(attrs, dir_arr, REMOVE_ACT, NULL);
+            parse_ext_directory(attrs, dir_arr, REMOVE_ACT, ext_node);
             g_free(dir_arr);
         }
 
@@ -1264,7 +1245,7 @@ void log_range_lost_ops(Ext_attributes_t *attrs, Range* obj_range, Ext_node_t *e
                 range_bytes = (range_upb(right) - range_lob(right) + 1) * attrs->block_size;
                 add_lost_op(attrs, right, lost_bytes);
             }
-            qemu_log("write\t0x%" PRIx64 " \t0x%" PRIx64 "\t %s\n", sec, obj_bytes, file_name);
+            qemu_log("write\t0x%" PRIx64 " \t%" PRIu64 "\t %s\n", sec, obj_bytes, file_name);
         }
     }
 }
@@ -1290,14 +1271,14 @@ void log_change_size(char is_changed, Ext_node_t *ext_node, int64_t count_old_bl
     }
 }
 
-// void log_move(Name_node_t *name_node, Name_node_t *dir_node, Ext_dir_entry_t *new_file)
-// {
-//     char file_name[2048] = "";
-//     char dir_name[2048] = "";
-//     get_file_name(file_name, name_node);
-//     get_file_name(dir_name, dir_node);
-//     qemu_log("move\t%s\t%s/%s\n", file_name, dir_name, new_file->name);
-// }
+void log_move(Name_node_t *name_node, Inode_t *inode)
+{
+    char file_name[2048] = "";
+    char old_file_name[2048] = "";
+    get_file_name(file_name, name_node);
+    get_name_for_inode(old_file_name, inode);
+    qemu_log("move\t%s\t%s\n", old_file_name, file_name);
+}
 
 void log_rename_op(char *old_name, char *new_name, Name_node_t *name_node)
 {
@@ -1307,11 +1288,13 @@ void log_rename_op(char *old_name, char *new_name, Name_node_t *name_node)
     qemu_log("rename\t%s/%s\t%s/%s\n", dir_name, old_name, dir_name, new_name);
 }
 
-void log_link_add(Name_node_t *name_node)
+void log_link_add(Name_node_t *name_node, Inode_t *inode)
 {
     char file_name[2048] = "";
+    char old_file_name[2048] = "";
     get_file_name(file_name, name_node);
-    qemu_log("add\t%s\n", file_name);
+    get_name_for_inode(old_file_name, inode);
+    qemu_log("add\t%s\t%s\n", old_file_name, file_name);
 }
 
 void log_link_delete(Name_node_t *name_node)
@@ -1783,7 +1766,7 @@ void parse_ext_directory(Ext_attributes_t *attrs, uint8_t *dir_arr, uint8_t acti
                     //create_file(attrs, new_file, inode);
                     break;
                 case REMOVE_ACT:
-                    inode_link_delete(child_inode, new_file);
+                    inode_link_delete(attrs, child_inode, new_file);
                     //force_delete_file(attrs, new_file->inode);
                     break;
                 }
