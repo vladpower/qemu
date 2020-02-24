@@ -274,8 +274,8 @@ const QEMULogItem qemu_log_items[] = {
     { CPU_LOG_TB_NOCHAIN, "nochain",
       "do not chain compiled TBs so that \"exec\" and \"cpu\" show\n"
       "complete traces" },
-    { DRIVE_LOG_EXT3, "ext3_file",
-      "log when guest OS access files in ext3" },
+    { DRIVE_LOG_EXT3, "ext_log",
+      "log when guest OS access files in ext2 and ext3" },
     { 0, NULL, NULL },
 };
 

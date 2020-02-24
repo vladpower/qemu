@@ -13,7 +13,7 @@ typedef struct Inode Inode_t;
 typedef struct Ext_node Ext_node_t;
 typedef struct Ext_dir_entry Ext_dir_entry_t;
 
-#define SIZE_OF_LAST_OPS_QUEUE 100000
+#define SIZE_OF_LAST_OPS_QUEUE 500000
 
 typedef struct Ext_attributes{
     BdrvChild *bdrv;

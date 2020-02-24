@@ -698,15 +698,9 @@ void drive_shadow_init(GTree *hdd_tree, BdrvChild *bdrv, Drive_t **drive)
     (*drive)->attr_parts = NULL;
     init_attrs(*drive);
     g_tree_insert(hdd_tree, (gpointer)bdrv, (gpointer)*drive);
-#ifdef SPEED_TEST
-    clock_t before = clock();
-#endif
+
     parse_mbr(bdrv, *drive);
-#ifdef SPEED_TEST
-    clock_t difference = clock() - before;
-    int msec = difference * 1000 / CLOCKS_PER_SEC;
-    qemu_log("build shadow structs: %d ms\n", msec);
-#endif
+
 }
 
 int get_partition_attrs(Drive_t *drive, uint64_t offset, Ext_attributes_t **attrs)
@@ -859,7 +853,7 @@ void build_old_dir_entries_tree(Ext_attributes_t *attrs, uint8_t *old_data, uint
         while (dir_offset < attrs->block_size && dir_node != NULL)
         {
             Ext_dir_entry_t *old_file = ext_dir_entry_init(file_ptr, dir_node);
-            if (old_file == NULL)
+            if (old_file == NULL || old_file->rec_len == 0)
                 break;
 
             if (n_file > 1)
@@ -885,7 +879,7 @@ void handle_new_dir_entries(Ext_attributes_t *attrs, uint8_t *new_data, uint32_t
         while (dir_offset < attrs->block_size && dir_node != NULL)
         {
             Ext_dir_entry_t *new_file = ext_dir_entry_init(file_ptr, dir_node);
-            if (new_file == NULL)
+            if (new_file == NULL || new_file->rec_len == 0)
                 break;
 
             if (n_file > 1)
@@ -948,6 +942,7 @@ uint64_t inode_ext2_update_shadow(Ext_attributes_t *attrs, uint8_t *new_inode_bu
 {
     uint64_t count_new_blocks = 0;
     Inode_t *inode = get_inode_for_ext_node(ext_node);
+
     for (int j = 0; j < 12; j++)
     {
         uint64_t old_block_pointer = get_int_num(old_inode_buf + j * 4, 4);
@@ -1143,12 +1138,13 @@ void indir_update_shadow(Ext_attributes_t *attrs, uint8_t *new_data, uint8_t *ol
 
 void add_lost_op(Ext_attributes_t *attrs, Range* range, uint64_t bytes)
 {
-    g_queue_push_head(attrs->last_ops_queue, (gpointer)range_lob(range));
+    g_queue_push_head(attrs->last_ops_queue, (gpointer)range);
     g_tree_insert(attrs->last_ops_tree, (gpointer)range, (gpointer)bytes);
     if (attrs->last_ops_queue->length >= SIZE_OF_LAST_OPS_QUEUE)
     {
         gpointer key = g_queue_pop_tail(attrs->last_ops_queue);
-        g_tree_remove(attrs->last_ops_tree, key);
+        if(key)
+            g_tree_remove(attrs->last_ops_tree, key);
     }
 }
 
@@ -1403,6 +1399,9 @@ int parse_boot_record(BdrvChild *bdrv, Drive_t *drive, uint64_t br_sector, bool 
 
 int parse_ext_part(BdrvChild *bdrv, Drive_t *drive, uint64_t sec_beg, uint64_t end_sector)
 {
+#ifdef SPEED_TEST
+    clock_t before = clock();
+#endif
     Ext_attributes_t *attrs = g_malloc0(sizeof(*attrs));
     attrs->bdrv = bdrv;
     attrs->bb_offset = sec_beg * SECTOR_SIZE; // get offset to boot block in bytes
@@ -1421,6 +1420,13 @@ int parse_ext_part(BdrvChild *bdrv, Drive_t *drive, uint64_t sec_beg, uint64_t e
 
     int ret = parse_ext_inode(attrs, ROOT_INODE, BUILD_ACT, attrs->mount_node);
     //qemu_log("tree %d\n", g_tree_nnodes (*block_tree));
+#ifdef SPEED_TEST
+    clock_t difference = clock() - before;
+    int msec = difference * 1000 / CLOCKS_PER_SEC;
+    char mount_name[128];
+    get_name_for_ext(mount_name, attrs->mount_node);
+    qemu_log("build\t%s\t%d ms\n", mount_name, msec);
+#endif
 
     return ret;
 }
@@ -1724,14 +1730,15 @@ int parse_ext4_pointers(Ext_attributes_t *attrs, uint8_t *inode_buf, uint8_t act
 
 bool valid_name(Ext_dir_entry_t *new_file)
 {
-    bool valid = true;
+    /* bool valid = true;
     for (int i = 0; i < new_file->name_len; i++)
     {
         char c = new_file->name[i];
         if(c < 0x20 || c > 0x7e)
             valid = false;
     }
-    return valid;
+    return valid; */
+    return true;
 }
 
 void parse_ext_directory(Ext_attributes_t *attrs, uint8_t *dir_arr, uint8_t action, Ext_node_t *ext_node)
